@@ -14,7 +14,7 @@ type autoCodeMysql struct{}
 // Author [SliverHorn](https://github.com/SliverHorn)
 func (s *autoCodeMysql) GetDB(businessDB string) (data []response.Db, err error) {
 	var entities []response.Db
-	sql := "SELECT SCHEMA_NAME AS `database` FROM INFORMATION_SCHEMA.SCHEMATA;"
+	sql := `SELECT SCHEMA_NAME AS "database" FROM INFORMATION_SCHEMA.SCHEMATA;`
 	if businessDB == "" {
 		err = global.GVA_DB.Raw(sql).Scan(&entities).Error
 	} else {
@@ -28,7 +28,7 @@ func (s *autoCodeMysql) GetDB(businessDB string) (data []response.Db, err error)
 // Author [SliverHorn](https://github.com/SliverHorn)
 func (s *autoCodeMysql) GetTables(businessDB string, dbName string) (data []response.Table, err error) {
 	var entities []response.Table
-	sql := `select table_name as table_name from information_schema.tables where table_schema = ?`
+	sql := `select *, table_name as table_name from information_schema.tables where table_schema = ?`
 	if businessDB == "" {
 		err = global.GVA_DB.Raw(sql, dbName).Scan(&entities).Error
 	} else {
@@ -43,8 +43,7 @@ func (s *autoCodeMysql) GetTables(businessDB string, dbName string) (data []resp
 // Author [SliverHorn](https://github.com/SliverHorn)
 func (s *autoCodeMysql) GetColumn(businessDB string, tableName string, dbName string) (data []response.Column, err error) {
 	var entities []response.Column
-	sql := `
-	SELECT 
+	sql := `SELECT
     c.COLUMN_NAME column_name,
     c.DATA_TYPE data_type,
     CASE c.DATA_TYPE
@@ -54,22 +53,28 @@ func (s *autoCodeMysql) GetColumn(businessDB string, tableName string, dbName st
         WHEN 'decimal' THEN CONCAT_WS(',', c.NUMERIC_PRECISION, c.NUMERIC_SCALE)
         WHEN 'int' THEN c.NUMERIC_PRECISION
         WHEN 'bigint' THEN c.NUMERIC_PRECISION
-        ELSE '' 
-    END AS data_type_long,
-    c.COLUMN_COMMENT column_comment,
+        ELSE ''
+        END AS data_type_long,
+    ep.value AS column_comment,
     CASE WHEN kcu.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS primary_key
-FROM 
+FROM
     INFORMATION_SCHEMA.COLUMNS c
-LEFT JOIN 
-    INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu 
-ON 
-    c.TABLE_SCHEMA = kcu.TABLE_SCHEMA 
-    AND c.TABLE_NAME = kcu.TABLE_NAME 
-    AND c.COLUMN_NAME = kcu.COLUMN_NAME 
-    AND kcu.CONSTRAINT_NAME = 'PRIMARY'
-WHERE 
-    c.TABLE_NAME = ? 
-    AND c.TABLE_SCHEMA = ?;`
+        LEFT JOIN
+    INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+    ON
+        c.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+            AND c.TABLE_NAME = kcu.TABLE_NAME
+            AND c.COLUMN_NAME = kcu.COLUMN_NAME
+            AND kcu.CONSTRAINT_NAME = 'PRIMARY'
+        LEFT JOIN
+    sys.extended_properties ep
+    ON
+        ep.major_id = OBJECT_ID(c.TABLE_SCHEMA+'.'+c.TABLE_NAME)
+            AND ep.minor_id = COLUMNPROPERTY(major_id, c.COLUMN_NAME, 'ColumnId')
+            AND ep.name = 'MS_Description'
+WHERE
+    c.TABLE_NAME = ?
+  AND c.TABLE_SCHEMA = ?;`
 	if businessDB == "" {
 		err = global.GVA_DB.Raw(sql, tableName, dbName).Scan(&entities).Error
 	} else {
