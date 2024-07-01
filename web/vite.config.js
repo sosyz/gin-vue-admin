@@ -11,12 +11,14 @@ import vuePlugin from '@vitejs/plugin-vue'
 import GvaPosition from './vitePlugin/gvaPosition'
 import GvaPositionServer from './vitePlugin/codeServer'
 import fullImportPlugin from './vitePlugin/fullImport/fullImport.js'
-import { svgBuilder } from './vitePlugin/svgIcon/svgIcon.js'
+import { svgBuilder } from 'vite-auto-import-svg'
+import { AddSecret } from './vitePlugin/secret'
 // @see https://cn.vitejs.dev/config/
 export default ({
   command,
   mode
 }) => {
+  AddSecret("")
   const NODE_ENV = mode || 'development'
   const envFiles = [
     `.env.${NODE_ENV}`
@@ -50,8 +52,9 @@ export default ({
   }
 
   const config = {
-    base: './', // index.html文件所在位置
+    base: '/', // index.html文件所在位置
     root: './', // js导入的资源路径，src
+    publicDir: 'public', // 静态资源文件夹
     resolve: {
       alias,
     },
@@ -67,7 +70,7 @@ export default ({
         // detail: https://cli.vuejs.org/config/#devserver-proxy
         [process.env.VITE_BASE_API]: { // 需要代理的路径   例如 '/api'
           target: `${process.env.VITE_BASE_PATH}:${process.env.VITE_SERVER_PORT}/`, // 代理到 目标路径
-          changeOrigin: false,
+          changeOrigin: true,
           rewrite: path => path.replace(new RegExp('^' + process.env.VITE_BASE_API), ''),
         }
       },
@@ -106,13 +109,13 @@ export default ({
     )
   } else {
     config.plugins.push(AutoImport({
-      resolvers: [ElementPlusResolver()]
-    }),
-    Components({
-      resolvers: [ElementPlusResolver({
-        importStyle: 'sass'
-      })]
-    }))
+        resolvers: [ElementPlusResolver()]
+      }),
+      Components({
+        resolvers: [ElementPlusResolver({
+          importStyle: 'sass'
+        })]
+      }))
   }
   return config
 }
