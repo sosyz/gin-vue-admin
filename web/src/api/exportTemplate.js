@@ -95,3 +95,51 @@ export const getSysExportTemplateList = (params) => {
     params
   })
 }
+
+
+// ExportExcel 导出表格token
+// @Tags SysExportTemplate
+// @Summary 导出表格
+// @Security ApiKeyAuth
+// @accept application/json
+// @Produce application/json
+// @Router /sysExportTemplate/exportExcel [get]
+export const exportExcel = (params) => {
+  return service({
+    url: '/sysExportTemplate/exportExcel',
+    method: 'get',
+    params
+  })
+}
+
+// ExportTemplate 导出表格模板
+// @Tags SysExportTemplate
+// @Summary 导出表格模板
+// @Security ApiKeyAuth
+// @accept application/json
+// @Produce application/json
+// @Router /sysExportTemplate/exportTemplate [get]
+export const exportTemplate = (params) => {
+  return service({
+    url: '/sysExportTemplate/exportTemplate',
+    method: 'get',
+    params
+  })
+}
+
+// PreviewSQL 预览最终生成的SQL
+// @Tags SysExportTemplate
+// @Summary 预览最终生成的SQL
+// @Security ApiKeyAuth
+// @accept application/json
+// @Produce application/json
+// @Router /sysExportTemplate/previewSQL [get]
+// @Param templateID query string true  "导出模板ID"
+// @Param params     query string false "查询参数编码字符串，参考 ExportExcel 组件"
+export const previewSQL = (params) => {
+  return service({
+    url: '/sysExportTemplate/previewSQL',
+    method: 'get',
+    params
+  })
+}

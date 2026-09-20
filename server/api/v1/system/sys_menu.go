@@ -45,7 +45,8 @@ func (a *AuthorityMenuApi) GetMenu(c *gin.Context) {
 // @Success   200   {object}  response.Response{data=systemRes.SysBaseMenusResponse,msg=string}  "获取用户动态路由,返回包括系统菜单列表"
 // @Router    /menu/getBaseMenuTree [post]
 func (a *AuthorityMenuApi) GetBaseMenuTree(c *gin.Context) {
-	menus, err := menuService.GetBaseMenuTree()
+	authority := utils.GetUserAuthorityId(c)
+	menus, err := menuService.GetBaseMenuTree(authority)
 	if err != nil {
 		global.GVA_LOG.Error("获取失败!", zap.Error(err))
 		response.FailWithMessage("获取失败", c)
@@ -74,7 +75,8 @@ func (a *AuthorityMenuApi) AddMenuAuthority(c *gin.Context) {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
-	if err := menuService.AddMenuAuthority(authorityMenu.Menus, authorityMenu.AuthorityId); err != nil {
+	adminAuthorityID := utils.GetUserAuthorityId(c)
+	if err := menuService.AddMenuAuthority(authorityMenu.Menus, adminAuthorityID, authorityMenu.AuthorityId); err != nil {
 		global.GVA_LOG.Error("添加失败!", zap.Error(err))
 		response.FailWithMessage("添加失败", c)
 	} else {
@@ -141,7 +143,7 @@ func (a *AuthorityMenuApi) AddBaseMenu(c *gin.Context) {
 	err = menuService.AddBaseMenu(menu)
 	if err != nil {
 		global.GVA_LOG.Error("添加失败!", zap.Error(err))
-		response.FailWithMessage("添加失败", c)
+		response.FailWithMessage("添加失败："+err.Error(), c)
 		return
 	}
 	response.OkWithMessage("添加成功", c)
@@ -171,7 +173,7 @@ func (a *AuthorityMenuApi) DeleteBaseMenu(c *gin.Context) {
 	err = baseMenuService.DeleteBaseMenu(menu.ID)
 	if err != nil {
 		global.GVA_LOG.Error("删除失败!", zap.Error(err))
-		response.FailWithMessage("删除失败", c)
+		response.FailWithMessage("删除失败:"+err.Error(), c)
 		return
 	}
 	response.OkWithMessage("删除成功", c)
@@ -242,6 +244,76 @@ func (a *AuthorityMenuApi) GetBaseMenuById(c *gin.Context) {
 	response.OkWithDetailed(systemRes.SysBaseMenuResponse{Menu: menu}, "获取成功", c)
 }
 
+// GetMenuRoles
+// @Tags      AuthorityMenu
+// @Summary   获取拥有指定菜单的角色ID列表
+// @Security  ApiKeyAuth
+// @accept    application/json
+// @Produce   application/json
+// @Param     menuId  query     uint                                                         true  "菜单ID"
+// @Success   200     {object}  response.Response{data=map[string]interface{},msg=string}    "获取成功"
+// @Router    /menu/getMenuRoles [get]
+func (a *AuthorityMenuApi) GetMenuRoles(c *gin.Context) {
+	var req systemReq.SetMenuAuthorities
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if req.MenuId == 0 {
+		response.FailWithMessage("菜单ID不能为空", c)
+		return
+	}
+	authorityIds, err := menuService.GetAuthoritiesByMenuId(req.MenuId)
+	if err != nil {
+		global.GVA_LOG.Error("获取失败!", zap.Error(err))
+		response.FailWithMessage("获取失败"+err.Error(), c)
+		return
+	}
+	if authorityIds == nil {
+		authorityIds = []uint{}
+	}
+	defaultRouterAuthorityIds, err := menuService.GetDefaultRouterAuthorityIds(req.MenuId)
+	if err != nil {
+		global.GVA_LOG.Error("获取首页角色失败!", zap.Error(err))
+		response.FailWithMessage("获取失败"+err.Error(), c)
+		return
+	}
+	if defaultRouterAuthorityIds == nil {
+		defaultRouterAuthorityIds = []uint{}
+	}
+	response.OkWithDetailed(gin.H{
+		"authorityIds":              authorityIds,
+		"defaultRouterAuthorityIds": defaultRouterAuthorityIds,
+	}, "获取成功", c)
+}
+
+// SetMenuRoles
+// @Tags      AuthorityMenu
+// @Summary   全量覆盖某菜单关联的角色列表
+// @Security  ApiKeyAuth
+// @accept    application/json
+// @Produce   application/json
+// @Param     data  body      systemReq.SetMenuAuthorities   true  "菜单ID和角色ID列表"
+// @Success   200   {object}  response.Response{msg=string}  "设置成功"
+// @Router    /menu/setMenuRoles [post]
+func (a *AuthorityMenuApi) SetMenuRoles(c *gin.Context) {
+	var req systemReq.SetMenuAuthorities
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if req.MenuId == 0 {
+		response.FailWithMessage("菜单ID不能为空", c)
+		return
+	}
+	if err := menuService.SetMenuAuthorities(req.MenuId, req.AuthorityIds); err != nil {
+		global.GVA_LOG.Error("设置失败!", zap.Error(err))
+		response.FailWithMessage("设置失败"+err.Error(), c)
+		return
+	}
+	response.OkWithMessage("设置成功", c)
+}
+
 // GetMenuList
 // @Tags      Menu
 // @Summary   分页获取基础menu列表
@@ -252,27 +324,12 @@ func (a *AuthorityMenuApi) GetBaseMenuById(c *gin.Context) {
 // @Success   200   {object}  response.Response{data=response.PageResult,msg=string}  "分页获取基础menu列表,返回包括列表,总数,页码,每页数量"
 // @Router    /menu/getMenuList [post]
 func (a *AuthorityMenuApi) GetMenuList(c *gin.Context) {
-	var pageInfo request.PageInfo
-	err := c.ShouldBindJSON(&pageInfo)
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	err = utils.Verify(pageInfo, utils.PageInfoVerify)
-	if err != nil {
-		response.FailWithMessage(err.Error(), c)
-		return
-	}
-	menuList, total, err := menuService.GetInfoList()
+	authorityID := utils.GetUserAuthorityId(c)
+	menuList, err := menuService.GetInfoList(authorityID)
 	if err != nil {
 		global.GVA_LOG.Error("获取失败!", zap.Error(err))
 		response.FailWithMessage("获取失败", c)
 		return
 	}
-	response.OkWithDetailed(response.PageResult{
-		List:     menuList,
-		Total:    total,
-		Page:     pageInfo.Page,
-		PageSize: pageInfo.PageSize,
-	}, "获取成功", c)
+	response.OkWithDetailed(menuList, "获取成功", c)
 }

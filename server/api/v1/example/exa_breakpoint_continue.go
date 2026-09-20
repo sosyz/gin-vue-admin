@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime/multipart"
 	"strconv"
+	"strings"
 
 	"github.com/flipped-aurora/gin-vue-admin/server/model/example"
 
@@ -84,7 +85,7 @@ func (b *FileUploadAndDownloadApi) BreakpointContinue(c *gin.Context) {
 // @Produce   application/json
 // @Param     file  formData  file                                                        true  "Find the file, 查找文件"
 // @Success   200   {object}  response.Response{data=exampleRes.FileResponse,msg=string}  "查找文件,返回包括文件详情"
-// @Router    /fileUploadAndDownload/findFile [post]
+// @Router    /fileUploadAndDownload/findFile [get]
 func (b *FileUploadAndDownloadApi) FindFile(c *gin.Context) {
 	fileMd5 := c.Query("fileMd5")
 	fileName := c.Query("fileName")
@@ -133,6 +134,11 @@ func (b *FileUploadAndDownloadApi) RemoveChunk(c *gin.Context) {
 	err := c.ShouldBindJSON(&file)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	// 路径穿越拦截
+	if strings.Contains(file.FilePath, "..") || strings.Contains(file.FilePath, "../") || strings.Contains(file.FilePath, "./") || strings.Contains(file.FilePath, ".\\") {
+		response.FailWithMessage("非法路径，禁止删除", c)
 		return
 	}
 	err = utils.RemoveChunk(file.FileMd5)

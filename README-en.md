@@ -1,6 +1,6 @@
 
 <div align=center>
-<img src="http://qmplusimg.henrongyi.top/gvalogo.jpg" width=300" height="300" />
+<img src="http://qmplusimg.henrongyi.top/gvalogo.jpg" width="300" height="300" />
 </div>
 <div align=center>
 <img src="https://img.shields.io/badge/golang-1.18-blue"/>
@@ -16,10 +16,6 @@ English | [简体中文](./README.md)
 
 [github](https://github.com/flipped-aurora/gin-vue-admin): https://github.com/flipped-aurora/gin-vue-admin
 
-[Vue3 version branch address](https://github.com/flipped-aurora/gin-vue-admin/tree/vue3Develop): https://github.com/flipped-aurora/gin-vue-admin/tree/vue3Develop
-
-[Approval flow branch](https://github.com/flipped-aurora/gin-vue-admin/tree/gva_workflow): https://github.com/flipped-aurora/gin-vue-admin/tree/gva_workflow
-
 # Project Guidelines
 [Online Documentation](https://www.gin-vue-admin.com/) : https://www.gin-vue-admin.com/
 
@@ -27,17 +23,20 @@ English | [简体中文](./README.md)
 
 [Development Steps](https://www.gin-vue-admin.com/guide/start-quickly/env.html) (Contributor:  <a href="https://github.com/LLemonGreen">LLemonGreen</a> And <a href="https://github.com/fkk0509">Fann</a>)
 
+## Live Demos
+
+- **Demo Site**: [http://demo.gin-vue-admin.com](http://demo.gin-vue-admin.com)
+- **Licensed Edition Demo**: [https://vip.gin-vue-admin.com](https://vip.gin-vue-admin.com)
+- **Demo Username**: `admin`
+- **Demo Password**: `123456`
+
+Explore the [licensed edition demo](https://vip.gin-vue-admin.com) to see the complete experience. For licensed-edition features or official commercial support, [purchase a commercial license](https://plugin.gin-vue-admin.com/license).
+
 ## 1. Basic Introduction
 
 ### 1.1 Project Introduction
 
 > Gin-vue-admin is a backstage management system based on [vue](https://vuejs.org) and [gin](https://gin-gonic.com), which separates the front and rear of the full stack. It integrates jwt authentication, dynamic routing, dynamic menu, casbin authentication, form generator, code generator and other functions. It provides a variety of sample files, allowing you to focus more time on business development.
-
-[Online Demo](http://demo.gin-vue-admin.com): http://demo.gin-vue-admin.com
-
-username：admin
-
-password：123456
 
 ### 1.2 Contributing Guide
 
@@ -152,7 +151,7 @@ go env -w GOPROXY=https://goproxy.cn,https://goproxy.io,direct
 cd server
 go generate -run "go env -w .*?"
 
-# 使用如下命令下载swag
+# Use the following command to download swag
 go get -u github.com/swaggo/swag/cmd/swag
 ````
 
@@ -303,6 +302,10 @@ swag init
 
 Thank you for considering your contribution to gin-vue-admin!
 
+<a href="https://openomy.app/github/flipped-aurora/gin-vue-admin" target="_blank" style="display: block; width: 100%;" align="center">
+  <img src="https://openomy.app/svg?repo=flipped-aurora/gin-vue-admin&chart=bubble&latestMonth=3" target="_blank" alt="Contribution Leaderboard" style="display: block; width: 100%;" />
+ </a>
+
 <a href="https://github.com/flipped-aurora/gin-vue-admin/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=flipped-aurora/gin-vue-admin" />
 </a>
@@ -313,5 +316,5 @@ If you find this project useful, you can buy author a glass of juice :tropical_d
 
 ## 10. Commercial considerations
 
-If you use this project for commercial purposes, please comply with the Apache2.0 agreement and retain the author's technical support statement.
+This project is licensed under the Apache License 2.0. When using, modifying, or distributing it, follow the `LICENSE` file and retain all applicable notices required by the license.
 

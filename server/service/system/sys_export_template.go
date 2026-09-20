@@ -3,7 +3,14 @@ package system
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"mime/multipart"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/flipped-aurora/gin-vue-admin/server/global"
 	"github.com/flipped-aurora/gin-vue-admin/server/model/common/request"
 	"github.com/flipped-aurora/gin-vue-admin/server/model/system"
@@ -11,14 +18,12 @@ import (
 	"github.com/flipped-aurora/gin-vue-admin/server/utils"
 	"github.com/xuri/excelize/v2"
 	"gorm.io/gorm"
-	"mime/multipart"
-	"net/url"
-	"strconv"
-	"strings"
 )
 
 type SysExportTemplateService struct {
 }
+
+var SysExportTemplateServiceApp = new(SysExportTemplateService)
 
 // CreateSysExportTemplate 创建导出模板记录
 // Author [piexlmax](https://github.com/piexlmax)
@@ -123,6 +128,11 @@ func (sysExportTemplateService *SysExportTemplateService) GetSysExportTemplateIn
 // ExportExcel 导出Excel
 // Author [piexlmax](https://github.com/piexlmax)
 func (sysExportTemplateService *SysExportTemplateService) ExportExcel(templateID string, values url.Values) (file *bytes.Buffer, name string, err error) {
+	var params = values.Get("params")
+	paramsValues, err := url.ParseQuery(params)
+	if err != nil {
+		return nil, "", fmt.Errorf("解析 params 参数失败: %v", err)
+	}
 	var template system.SysExportTemplate
 	err = global.GVA_DB.Preload("Conditions").Preload("JoinTemplate").First(&template, "template_id = ?", templateID).Error
 	if err != nil {
@@ -150,92 +160,202 @@ func (sysExportTemplateService *SysExportTemplateService) ExportExcel(templateID
 		return nil, "", err
 	}
 	var tableTitle []string
+	var selectKeyFmt []string
 	for _, key := range columns {
+		selectKeyFmt = append(selectKeyFmt, key)
 		tableTitle = append(tableTitle, templateInfoMap[key])
 	}
-	selects := strings.Join(columns, ", ")
+
+	selects := strings.Join(selectKeyFmt, ", ")
 	var tableMap []map[string]interface{}
 	db := global.GVA_DB
 	if template.DBName != "" {
 		db = global.MustGetGlobalDBByDBName(template.DBName)
 	}
 
-	if len(template.JoinTemplate) > 0 {
-		for _, join := range template.JoinTemplate {
-			db = db.Joins(join.JOINS + "`" + join.Table + "`" + " ON " + join.ON)
-		}
-	}
-
-	db = db.Select(selects).Table(template.TableName)
-
-	if len(template.Conditions) > 0 {
-		for _, condition := range template.Conditions {
-			sql := fmt.Sprintf("%s %s ?", condition.Column, condition.Operator)
-			value := values.Get(condition.From)
-			if value != "" {
-				if condition.Operator == "LIKE" {
-					value = "%" + value + "%"
-				}
-				db = db.Where(sql, value)
+	// 如果有自定义SQL，则优先使用自定义SQL
+	if template.SQL != "" {
+		// 将 url.Values 转换为 map[string]interface{} 以支持 GORM 的命名参数
+		sqlParams := make(map[string]interface{})
+		for k, v := range paramsValues {
+			if len(v) > 0 {
+				sqlParams[k] = v[0]
 			}
 		}
-	}
-	// 通过参数传入limit
-	limit := values.Get("limit")
-	if limit != "" {
-		l, e := strconv.Atoi(limit)
-		if e == nil {
-			db = db.Limit(l)
+
+		// 执行原生 SQL，支持 @key 命名参数
+		err = db.Raw(template.SQL, sqlParams).Scan(&tableMap).Error
+		if err != nil {
+			return nil, "", err
+		}
+	} else {
+		if len(template.JoinTemplate) > 0 {
+			for _, join := range template.JoinTemplate {
+				db = db.Joins(join.JOINS + " " + join.Table + " ON " + join.ON)
+			}
+		}
+
+		db = db.Select(selects).Table(template.TableName)
+
+		filterDeleted := false
+
+		filterParam := paramsValues.Get("filterDeleted")
+		if filterParam == "true" {
+			filterDeleted = true
+		}
+
+		if filterDeleted {
+			// 自动过滤主表的软删除
+			db = db.Where(fmt.Sprintf("%s.deleted_at IS NULL", template.TableName))
+
+			// 过滤关联表的软删除(如果有)
+			if len(template.JoinTemplate) > 0 {
+				for _, join := range template.JoinTemplate {
+					// 检查关联表是否有deleted_at字段
+					hasDeletedAt := sysExportTemplateService.hasDeletedAtColumn(join.Table)
+					if hasDeletedAt {
+						db = db.Where(fmt.Sprintf("%s.deleted_at IS NULL", join.Table))
+					}
+				}
+			}
+		}
+
+		if len(template.Conditions) > 0 {
+			for _, condition := range template.Conditions {
+				sql := fmt.Sprintf("%s %s ?", condition.Column, condition.Operator)
+				value := paramsValues.Get(condition.From)
+
+				if condition.Operator == "IN" || condition.Operator == "NOT IN" {
+					sql = fmt.Sprintf("%s %s (?)", condition.Column, condition.Operator)
+				}
+
+				if condition.Operator == "BETWEEN" {
+					sql = fmt.Sprintf("%s BETWEEN ? AND ?", condition.Column)
+					startValue := paramsValues.Get("start" + condition.From)
+					endValue := paramsValues.Get("end" + condition.From)
+					if startValue != "" && endValue != "" {
+						db = db.Where(sql, startValue, endValue)
+					}
+					continue
+				}
+
+				if value != "" {
+					if condition.Operator == "LIKE" {
+						value = "%" + value + "%"
+					}
+					db = db.Where(sql, value)
+				}
+			}
+		}
+		// 通过参数传入limit
+		limit := paramsValues.Get("limit")
+		if limit != "" {
+			l, e := strconv.Atoi(limit)
+			if e == nil {
+				db = db.Limit(l)
+			}
+		}
+		// 模板的默认limit
+		if limit == "" && template.Limit != nil && *template.Limit != 0 {
+			db = db.Limit(*template.Limit)
+		}
+
+		// 通过参数传入offset
+		offset := paramsValues.Get("offset")
+		if offset != "" {
+			o, e := strconv.Atoi(offset)
+			if e == nil {
+				db = db.Offset(o)
+			}
+		}
+
+		// 获取当前表的所有字段
+		table := template.TableName
+		orderColumns, err := db.Migrator().ColumnTypes(table)
+		if err != nil {
+			return nil, "", err
+		}
+
+		// 创建一个 map 来存储字段名
+		fields := make(map[string]bool)
+
+		for _, column := range orderColumns {
+			fields[column.Name()] = true
+		}
+
+		// 通过参数传入order
+		order := paramsValues.Get("order")
+
+		if order == "" && template.Order != "" {
+			// 如果没有order入参，这里会使用模板的默认排序
+			order = template.Order
+		}
+
+		if order != "" {
+			checkOrderArr := strings.Split(order, " ")
+			orderStr := ""
+			// 检查请求的排序字段是否在字段列表中
+			if _, ok := fields[checkOrderArr[0]]; !ok {
+				return nil, "", fmt.Errorf("order by %s is not in the fields", order)
+			}
+			orderStr = checkOrderArr[0]
+			if len(checkOrderArr) > 1 {
+				if checkOrderArr[1] != "asc" && checkOrderArr[1] != "desc" {
+					return nil, "", fmt.Errorf("order by %s is not secure", order)
+				}
+				orderStr = orderStr + " " + checkOrderArr[1]
+			}
+			db = db.Order(orderStr)
+		}
+
+		err = db.Debug().Find(&tableMap).Error
+		if err != nil {
+			return nil, "", err
 		}
 	}
-	// 模板的默认limit
-	if limit == "" && template.Limit != 0 {
-		db = db.Limit(template.Limit)
-	}
 
-	// 通过参数传入offset
-	offset := values.Get("offset")
-	if offset != "" {
-		o, e := strconv.Atoi(offset)
-		if e == nil {
-			db = db.Offset(o)
-		}
-	}
-
-	// 通过参数传入order
-	order := values.Get("order")
-	if order != "" {
-		db = db.Order(order)
-	}
-	// 模板的默认order
-	if order == "" && template.Order != "" {
-		db = db.Order(template.Order)
-	}
-
-	err = db.Debug().Find(&tableMap).Error
-	if err != nil {
-		return nil, "", err
-	}
 	var rows [][]string
 	rows = append(rows, tableTitle)
-	for _, table := range tableMap {
+	for _, exTable := range tableMap {
 		var row []string
 		for _, column := range columns {
+			column = strings.ReplaceAll(column, "\"", "")
+			column = strings.ReplaceAll(column, "`", "")
 			if len(template.JoinTemplate) > 0 {
-				columnArr := strings.Split(column, ".")
-				if len(columnArr) > 1 {
-					column = strings.Split(column, ".")[1]
+				columnAs := strings.Split(column, " as ")
+				if len(columnAs) > 1 {
+					column = strings.TrimSpace(strings.Split(column, " as ")[1])
+				} else {
+					columnArr := strings.Split(column, ".")
+					if len(columnArr) > 1 {
+						column = strings.Split(column, ".")[1]
+					}
 				}
 			}
-			row = append(row, fmt.Sprintf("%v", table[column]))
+			// 需要对时间类型特殊处理
+			if t, ok := exTable[column].(time.Time); ok {
+				row = append(row, t.Format("2006-01-02 15:04:05"))
+			} else {
+				row = append(row, fmt.Sprintf("%v", exTable[column]))
+			}
 		}
 		rows = append(rows, row)
 	}
 	for i, row := range rows {
 		for j, colCell := range row {
-			err := f.SetCellValue("Sheet1", fmt.Sprintf("%s%d", getColumnName(j+1), i+1), colCell)
-			if err != nil {
-				return nil, "", err
+			cell := fmt.Sprintf("%s%d", getColumnName(j+1), i+1)
+
+			var sErr error
+			if v, err := strconv.ParseFloat(colCell, 64); err == nil {
+				sErr = f.SetCellValue("Sheet1", cell, v)
+			} else if v, err := strconv.ParseInt(colCell, 10, 64); err == nil {
+				sErr = f.SetCellValue("Sheet1", cell, v)
+			} else {
+				sErr = f.SetCellValue("Sheet1", cell, colCell)
+			}
+
+			if sErr != nil {
+				return nil, "", sErr
 			}
 		}
 	}
@@ -246,6 +366,191 @@ func (sysExportTemplateService *SysExportTemplateService) ExportExcel(templateID
 	}
 
 	return file, template.Name, nil
+}
+
+// PreviewSQL 预览最终生成的 SQL（不执行查询，仅返回 SQL 字符串）
+// Author [piexlmax](https://github.com/piexlmax) & [trae-ai]
+func (sysExportTemplateService *SysExportTemplateService) PreviewSQL(templateID string, values url.Values) (sqlPreview string, err error) {
+	// 解析 params（与导出逻辑保持一致）
+	var params = values.Get("params")
+	paramsValues, _ := url.ParseQuery(params)
+
+	// 加载模板
+	var template system.SysExportTemplate
+	err = global.GVA_DB.Preload("Conditions").Preload("JoinTemplate").First(&template, "template_id = ?", templateID).Error
+	if err != nil {
+		return "", err
+	}
+
+	// 解析模板列
+	var templateInfoMap = make(map[string]string)
+	columns, err := utils.GetJSONKeys(template.TemplateInfo)
+	if err != nil {
+		return "", err
+	}
+	err = json.Unmarshal([]byte(template.TemplateInfo), &templateInfoMap)
+	if err != nil {
+		return "", err
+	}
+	var selectKeyFmt []string
+	for _, key := range columns {
+		selectKeyFmt = append(selectKeyFmt, key)
+	}
+	selects := strings.Join(selectKeyFmt, ", ")
+
+	// 生成 FROM 与 JOIN 片段
+	var sb strings.Builder
+	sb.WriteString("SELECT ")
+	sb.WriteString(selects)
+	sb.WriteString(" FROM ")
+	sb.WriteString(template.TableName)
+
+	if len(template.JoinTemplate) > 0 {
+		for _, join := range template.JoinTemplate {
+			sb.WriteString(" ")
+			sb.WriteString(join.JOINS)
+			sb.WriteString(" ")
+			sb.WriteString(join.Table)
+			sb.WriteString(" ON ")
+			sb.WriteString(join.ON)
+		}
+	}
+
+	// WHERE 条件
+	var wheres []string
+
+	// 软删除过滤
+	filterDeleted := false
+	if paramsValues != nil {
+		filterParam := paramsValues.Get("filterDeleted")
+		if filterParam == "true" {
+			filterDeleted = true
+		}
+	}
+	if filterDeleted {
+		wheres = append(wheres, fmt.Sprintf("%s.deleted_at IS NULL", template.TableName))
+		if len(template.JoinTemplate) > 0 {
+			for _, join := range template.JoinTemplate {
+				if sysExportTemplateService.hasDeletedAtColumn(join.Table) {
+					wheres = append(wheres, fmt.Sprintf("%s.deleted_at IS NULL", join.Table))
+				}
+			}
+		}
+	}
+
+	// 模板条件（保留与 ExportExcel 同步的解析规则）
+	if len(template.Conditions) > 0 {
+		for _, condition := range template.Conditions {
+			op := strings.ToUpper(strings.TrimSpace(condition.Operator))
+			col := strings.TrimSpace(condition.Column)
+
+			// 预览优先展示传入值，没有则展示占位符
+			val := ""
+			if paramsValues != nil {
+				val = paramsValues.Get(condition.From)
+			}
+
+			switch op {
+			case "BETWEEN":
+				startValue := ""
+				endValue := ""
+				if paramsValues != nil {
+					startValue = paramsValues.Get("start" + condition.From)
+					endValue = paramsValues.Get("end" + condition.From)
+				}
+				if startValue != "" && endValue != "" {
+					wheres = append(wheres, fmt.Sprintf("%s BETWEEN '%s' AND '%s'", col, startValue, endValue))
+				} else {
+					wheres = append(wheres, fmt.Sprintf("%s BETWEEN {start%s} AND {end%s}", col, condition.From, condition.From))
+				}
+			case "IN", "NOT IN":
+				if val != "" {
+					// 逗号分隔值做简单展示
+					parts := strings.Split(val, ",")
+					for i := range parts {
+						parts[i] = strings.TrimSpace(parts[i])
+					}
+					wheres = append(wheres, fmt.Sprintf("%s %s ('%s')", col, op, strings.Join(parts, "','")))
+				} else {
+					wheres = append(wheres, fmt.Sprintf("%s %s ({%s})", col, op, condition.From))
+				}
+			case "LIKE":
+				if val != "" {
+					wheres = append(wheres, fmt.Sprintf("%s LIKE '%%%s%%'", col, val))
+				} else {
+					wheres = append(wheres, fmt.Sprintf("%s LIKE {%%%s%%}", col, condition.From))
+				}
+			default:
+				if val != "" {
+					wheres = append(wheres, fmt.Sprintf("%s %s '%s'", col, op, val))
+				} else {
+					wheres = append(wheres, fmt.Sprintf("%s %s {%s}", col, op, condition.From))
+				}
+			}
+		}
+	}
+
+	if len(wheres) > 0 {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(strings.Join(wheres, " AND "))
+	}
+
+	// 排序
+	order := ""
+	if paramsValues != nil {
+		order = paramsValues.Get("order")
+	}
+	if order == "" && template.Order != "" {
+		order = template.Order
+	}
+	if order != "" {
+		sb.WriteString(" ORDER BY ")
+		sb.WriteString(order)
+	}
+
+	// limit/offset（如果传入或默认值为0，则不生成）
+	limitStr := ""
+	offsetStr := ""
+	if paramsValues != nil {
+		limitStr = paramsValues.Get("limit")
+		offsetStr = paramsValues.Get("offset")
+	}
+
+	// 处理模板默认limit（仅当非0时）
+	if limitStr == "" && template.Limit != nil && *template.Limit != 0 {
+		limitStr = strconv.Itoa(*template.Limit)
+	}
+
+	// 解析为数值，用于判断是否生成
+	limitInt := 0
+	offsetInt := 0
+	if limitStr != "" {
+		if v, e := strconv.Atoi(limitStr); e == nil {
+			limitInt = v
+		}
+	}
+	if offsetStr != "" {
+		if v, e := strconv.Atoi(offsetStr); e == nil {
+			offsetInt = v
+		}
+	}
+
+	if limitInt > 0 {
+		sb.WriteString(" LIMIT ")
+		sb.WriteString(strconv.Itoa(limitInt))
+		if offsetInt > 0 {
+			sb.WriteString(" OFFSET ")
+			sb.WriteString(strconv.Itoa(offsetInt))
+		}
+	} else {
+		// 当limit未设置或为0时，仅当offset>0才生成OFFSET
+		if offsetInt > 0 {
+			sb.WriteString(" OFFSET ")
+			sb.WriteString(strconv.Itoa(offsetInt))
+		}
+	}
+
+	return sb.String(), nil
 }
 
 // ExportTemplate 导出Excel模板
@@ -269,14 +574,18 @@ func (sysExportTemplateService *SysExportTemplateService) ExportTemplate(templat
 		return
 	}
 	var templateInfoMap = make(map[string]string)
+
+	columns, err := utils.GetJSONKeys(template.TemplateInfo)
+
 	err = json.Unmarshal([]byte(template.TemplateInfo), &templateInfoMap)
 	if err != nil {
 		return nil, "", err
 	}
 	var tableTitle []string
-	for key := range templateInfoMap {
+	for _, key := range columns {
 		tableTitle = append(tableTitle, templateInfoMap[key])
 	}
+
 	for i := range tableTitle {
 		fErr := f.SetCellValue("Sheet1", fmt.Sprintf("%s%d", getColumnName(i+1), 1), tableTitle[i])
 		if fErr != nil {
@@ -290,6 +599,13 @@ func (sysExportTemplateService *SysExportTemplateService) ExportTemplate(templat
 	}
 
 	return file, template.Name, nil
+}
+
+// 辅助函数：检查表是否有deleted_at列
+func (s *SysExportTemplateService) hasDeletedAtColumn(tableName string) bool {
+	var count int64
+	global.GVA_DB.Raw("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = 'deleted_at'", tableName).Count(&count)
+	return count > 0
 }
 
 // ImportExcel 导入Excel
@@ -316,6 +632,9 @@ func (sysExportTemplateService *SysExportTemplateService) ImportExcel(templateID
 	if err != nil {
 		return err
 	}
+	if len(rows) < 2 {
+		return errors.New("Excel data is not enough.\nIt should contain title row and data")
+	}
 
 	var templateInfoMap = make(map[string]string)
 	err = json.Unmarshal([]byte(template.TemplateInfo), &templateInfoMap)
@@ -323,43 +642,75 @@ func (sysExportTemplateService *SysExportTemplateService) ImportExcel(templateID
 		return err
 	}
 
-	var titleKeyMap = make(map[string]string)
-	for key, title := range templateInfoMap {
-		titleKeyMap[title] = key
-	}
-
 	db := global.GVA_DB
 	if template.DBName != "" {
 		db = global.MustGetGlobalDBByDBName(template.DBName)
 	}
 
+	items, err := sysExportTemplateService.parseExcelToMap(rows, templateInfoMap)
+	if err != nil {
+		return err
+	}
+
 	return db.Transaction(func(tx *gorm.DB) error {
-		excelTitle := rows[0]
-		values := rows[1:]
-		items := make([]map[string]interface{}, 0, len(values))
-		for _, row := range values {
-			var item = make(map[string]interface{})
-			for ii, value := range row {
-				key := titleKeyMap[excelTitle[ii]]
-				item[key] = value
-			}
-
-			// 此处需要等待gorm修复HasColumn中的painc问题
-			//needCreated := tx.Migrator().HasColumn(template.TableName, "created_at")
-			//needUpdated := tx.Migrator().HasColumn(template.TableName, "updated_at")
-			//
-			//if item["created_at"] == nil && needCreated {
-			//	item["created_at"] = time.Now()
-			//}
-			//if item["updated_at"] == nil && needUpdated {
-			//	item["updated_at"] = time.Now()
-			//}
-
-			items = append(items, item)
+		if template.ImportSQL != "" {
+			return sysExportTemplateService.importBySQL(tx, template.ImportSQL, items)
 		}
-		cErr := tx.Table(template.TableName).CreateInBatches(&items, 1000).Error
-		return cErr
+		return sysExportTemplateService.importByGORM(tx, template.TableName, items)
 	})
+}
+
+func (sysExportTemplateService *SysExportTemplateService) parseExcelToMap(rows [][]string, templateInfoMap map[string]string) ([]map[string]interface{}, error) {
+	var titleKeyMap = make(map[string]string)
+	for key, title := range templateInfoMap {
+		titleKeyMap[title] = key
+	}
+
+	excelTitle := rows[0]
+	for i, str := range excelTitle {
+		excelTitle[i] = strings.TrimSpace(str)
+	}
+	values := rows[1:]
+	items := make([]map[string]interface{}, 0, len(values))
+	for _, row := range values {
+		var item = make(map[string]interface{})
+		for ii, value := range row {
+			if ii >= len(excelTitle) {
+				continue
+			}
+			if _, ok := titleKeyMap[excelTitle[ii]]; !ok {
+				continue // excel中多余的标题，在模板信息中没有对应的字段，因此key为空，必须跳过
+			}
+			key := titleKeyMap[excelTitle[ii]]
+			item[key] = value
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (sysExportTemplateService *SysExportTemplateService) importBySQL(tx *gorm.DB, sql string, items []map[string]interface{}) error {
+	for _, item := range items {
+		if err := tx.Exec(sql, item).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (sysExportTemplateService *SysExportTemplateService) importByGORM(tx *gorm.DB, tableName string, items []map[string]interface{}) error {
+	needCreated := tx.Migrator().HasColumn(tableName, "created_at")
+	needUpdated := tx.Migrator().HasColumn(tableName, "updated_at")
+
+	for _, item := range items {
+		if item["created_at"] == nil && needCreated {
+			item["created_at"] = time.Now()
+		}
+		if item["updated_at"] == nil && needUpdated {
+			item["updated_at"] = time.Now()
+		}
+	}
+	return tx.Table(tableName).CreateInBatches(&items, 1000).Error
 }
 
 func getColumnName(n int) string {

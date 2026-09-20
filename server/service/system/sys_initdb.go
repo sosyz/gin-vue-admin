@@ -11,6 +11,14 @@ import (
 	"sort"
 )
 
+// dbReadyCallback 数据库就绪回调函数，由 initialize 包注入
+var dbReadyCallback func()
+
+// SetDBReadyCallback 设置数据库就绪回调
+func SetDBReadyCallback(callback func()) {
+	dbReadyCallback = callback
+}
+
 const (
 	Mysql           = "mysql"
 	Pgsql           = "pgsql"
@@ -89,6 +97,7 @@ type InitDBService struct{}
 // InitDB 创建数据库并初始化 总入口
 func (initDBService *InitDBService) InitDB(conf request.InitDB) (err error) {
 	ctx := context.TODO()
+	ctx = context.WithValue(ctx, "adminPassword", conf.AdminPassword)
 	if len(initializers) == 0 {
 		return errors.New("无可用初始化过程，请检查初始化是否已执行完成")
 	}
@@ -134,6 +143,12 @@ func (initDBService *InitDBService) InitDB(conf request.InitDB) (err error) {
 	}
 	initializers = initSlice{}
 	cache = map[string]*orderedInitializer{}
+
+	// 通知数据库已就绪，触发插件注册
+	if dbReadyCallback != nil {
+		dbReadyCallback()
+	}
+
 	return nil
 }
 
@@ -159,7 +174,7 @@ func createDatabase(dsn string, driver string, createSql string) error {
 // createTables 创建表（默认 dbInitHandler.initTables 行为）
 func createTables(ctx context.Context, inits initSlice) error {
 	next, cancel := context.WithCancel(ctx)
-	defer func(c func()) { c() }(cancel)
+	defer cancel()
 	for _, init := range inits {
 		if init.TableCreated(next) {
 			continue

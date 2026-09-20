@@ -144,3 +144,63 @@ export const freshCasbin = () => {
     method: 'get'
   })
 }
+
+export const syncApi = () => {
+  return service({
+    url: '/api/syncApi',
+    method: 'get'
+  })
+}
+
+export const getApiGroups = () => {
+  return service({
+    url: '/api/getApiGroups',
+    method: 'get'
+  })
+}
+
+export const ignoreApi = (data) => {
+  return service({
+    url: '/api/ignoreApi',
+    method: 'post',
+    data
+  })
+}
+
+export const enterSyncApi = (data) => {
+  return service({
+    url: '/api/enterSyncApi',
+    method: 'post',
+    data
+  })
+}
+
+/**
+ * 获取拥有指定API权限的角色ID列表
+ * @param {string} path API路径
+ * @param {string} method 请求方法
+ * @returns {Promise<number[]>} 角色ID数组
+ */
+export const getApiRoles = (path, method) => {
+  return service({
+    url: '/api/getApiRoles',
+    method: 'get',
+    params: { path, method }
+  })
+}
+
+/**
+ * 全量覆盖某API关联的角色列表
+ * @param {Object} data
+ * @param {string} data.path API路径
+ * @param {string} data.method 请求方法
+ * @param {number[]} data.authorityIds 角色ID列表
+ * @returns {Promise}
+ */
+export const setApiRoles = (data) => {
+  return service({
+    url: '/api/setApiRoles',
+    method: 'post',
+    data
+  })
+}

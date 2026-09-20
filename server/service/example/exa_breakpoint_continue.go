@@ -10,6 +10,8 @@ import (
 
 type FileUploadAndDownloadService struct{}
 
+var FileUploadAndDownloadServiceApp = new(FileUploadAndDownloadService)
+
 //@author: [piexlmax](https://github.com/piexlmax)
 //@function: FindOrCreateFile
 //@description: 上传文件时检测当前文件属性，如果没有文件则创建，有则返回文件的当前切片
@@ -22,7 +24,7 @@ func (e *FileUploadAndDownloadService) FindOrCreateFile(fileMd5 string, fileName
 	cfile.FileName = fileName
 	cfile.ChunkTotal = chunkTotal
 
-	if errors.Is(global.GVA_DB.Where("file_md5 = ? AND is_finish = ?", fileMd5, true).First(&file).Error, gorm.ErrRecordNotFound) {
+	if errors.Is(global.GVA_DB.Where("file_md5 = ? AND file_name = ? AND is_finish = ?", fileMd5, fileName, true).First(&file).Error, gorm.ErrRecordNotFound) {
 		err = global.GVA_DB.Where("file_md5 = ? AND file_name = ?", fileMd5, fileName).Preload("ExaFileChunk").FirstOrCreate(&file, cfile).Error
 		return file, err
 	}
@@ -56,7 +58,7 @@ func (e *FileUploadAndDownloadService) CreateFileChunk(id uint, fileChunkPath st
 func (e *FileUploadAndDownloadService) DeleteFileChunk(fileMd5 string, filePath string) error {
 	var chunks []example.ExaFileChunk
 	var file example.ExaFile
-	err := global.GVA_DB.Where("file_md5 = ? ", fileMd5).First(&file).
+	err := global.GVA_DB.Where("file_md5 = ?", fileMd5).First(&file).
 		Updates(map[string]interface{}{
 			"IsFinish":  true,
 			"file_path": filePath,
